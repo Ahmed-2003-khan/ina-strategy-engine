@@ -70,7 +70,7 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
     
     # Calculate the counter offer: (asking_price + user_offer) / 2
     # We use math.ceil to round up to be slightly tougher in negotiation.
-    counter_offer = math.ceil((input_data.asking_price + input_data.user_offer) / 2)
+    counter_offer = float(math.ceil((input_data.asking_price + input_data.user_offer) / 2))
     
     # --- Counter-offer Sanity Check ---
     # A crucial check: Our counter-offer should NEVER be lower than our MAM.
