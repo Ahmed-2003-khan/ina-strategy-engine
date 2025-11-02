@@ -1,49 +1,40 @@
 # Purpose: Defines the steps to build a production-ready container image
-# for the strategy-engine service.
+# for the strategy-engine service. (v3 - Fixing Python Path)
 
 # --- Stage 1: The "Builder" Stage ---
-# We use a full Python image to install dependencies
+# We use a full Python image to build a clean virtual environment
 FROM python:3.11-slim as builder
 
-# Set the working directory inside the container
-WORKDIR /opt/app
+# Create a virtual environment
+RUN python -m venv /opt/venv
+# Activate the venv for subsequent RUN commands
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Install build-time dependencies (if any)
-# (We don't have any here, but it's good practice)
-# RUN apt-get update && apt-get install -y build-essential
-
-# We will install our dependencies into a local directory
-# This avoids installing them system-wide
-ENV PIP_TARGET=/opt/app/deps
-ENV PATH="${PIP_TARGET}/bin:${PATH}"
-
-# Copy only the requirements file first
-# This leverages Docker's layer caching.
-COPY requirements.txt .
-
-# Install dependencies into our target directory
-RUN pip install --no-cache-dir -r requirements.txt --target $PIP_TARGET
+# Install dependencies *into the venv*
+# We copy requirements.txt to a temp location to install it
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install gunicorn
 
 # --- Stage 2: The "Final" Stage ---
-# We use a *new*, clean base image for our production container
 FROM python:3.11-slim
 
-# Set the working directory
-WORKDIR /app
+# Set a new working directory. This will be the PARENT of our 'app' package.
+WORKDIR /service
 
-# Copy the *installed dependencies* from the 'builder' stage
-COPY --from=builder /opt/app/deps /usr/local/lib/python3.11/site-packages
+# Copy the *entire virtual environment* from the 'builder' stage
+COPY --from=builder /opt/venv /opt/venv
 
-# Copy our application source code
-COPY ./app /app
+# Copy our application source code into a SUB-DIRECTORY named 'app'
+# This creates the correct /service/app structure
+COPY ./app /service/app
 
 # Expose the port our application will run on
 EXPOSE 8000
 
-# Define the command to run our application
-# We use Gunicorn for production instead of Uvicorn's dev server.
-# First, let's install Gunicorn.
-RUN pip install gunicorn
+# Tell the container to use the executables from our venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Run the app
+# Define the command to run our application
+# Because WORKDIR is /service, Python will find the 'app' module within it.
 CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "app.main:app", "--bind", "0.0.0.0:8000"]

@@ -1,8 +1,7 @@
 # Purpose: Defines and runs the multi-container dev environment.
-# This file lets us spin up our service AND its dependencies (like Redis)
-# with a single command.
+# (v3 - Fixing path)
 
-version: '3.8' # Use a modern version of compose
+version: '3.8' # You can remove this line to fix the 'obsolete' warning
 
 services:
   # Service 1: Our Strategy Engine (MS 4)
@@ -15,17 +14,15 @@ services:
     ports:
       - "8000:8000" # Map host port 8000 to container port 8000
     environment:
-      # --- IMPORTANT ---
-      # This is how you pass secrets. NEVER hardcode them.
-      # We'll add example env vars for Redis later.
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
       - redis # Tell Docker to start Redis *before* starting our app
     volumes:
-      # In dev, we mount our local 'app' directory into the container.
-      # This enables 'hot-reloading'. You change code, the server restarts.
-      - ./app:/app
+      # --- THIS IS THE CRITICAL FIX ---
+      # Mount your local './app' folder to '/service/app' inside the container
+      # This matches the new structure in the Dockerfile
+      - ./app:/service/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Service 2: The Dialogue State Tracker (MS 3)
