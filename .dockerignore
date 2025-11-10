@@ -28,3 +28,6 @@ requirements-dev.txt
 .dockerignore
 Dockerfile
 docker-compose.yml
+
+# Test coverage reports
+.coverage

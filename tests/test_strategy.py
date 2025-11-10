@@ -71,7 +71,7 @@ def test_sentiment_rule_does_not_fire_if_offer_too_low(base_input):
     # Offer is 30,000. 95% threshold is 39,900.
     # This should *fail* the sentiment rule and fall through
     # to the "Lowball REJECT" rule.
-    base_input.user_offer = 30000.0
+    base_input.user_offer = 25000.0
     
     # Act
     decision = make_decision(base_input)

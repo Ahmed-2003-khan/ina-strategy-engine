@@ -20,3 +20,6 @@ Thumbs.db
 # Secrets (we will use env variables)
 .env
 *.env
+
+# Test coverage reports
+.coverage
