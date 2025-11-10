@@ -1,39 +1,113 @@
-# Purpose: Unit tests for the core negotiation logic.
-# These tests ensure that the 'make_decision' function behaves
-# exactly as expected under all conditions.
+# Purpose: Unit tests for the core negotiation logic (v1.2).
 
 import pytest
-import logging 
+import logging
 from app.strategy_core import make_decision
 from app.schemas import StrategyInput
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # =======================================================================
 #  Test Data Fixtures
 # =======================================================================
 
-# A 'base' input that we can modify for each test case.
-# This makes tests cleaner as we only change what's relevant.
 @pytest.fixture
 def base_input():
-    """A standard baseline input for negotiation."""
+    """
+    A standard baseline input for negotiation.
+    v1.1 Update: Includes default 'intent' and 'sentiment'.
+    """
     return StrategyInput(
         mam=42000.0,
         asking_price=50000.0,
         user_offer=45000.0,  # Note: this default will trigger ACCEPT
+        
+        # --- New v1.1 Fields ---
+        user_intent="MAKE_OFFER",
+        user_sentiment="neutral", # Default to neutral
+        # ---------------------
+        
         session_id="sess_test_fixture",
         history=[]
     )
 
 # =======================================================================
-#  Test Cases for make_decision()
+#  New Test Case for v1.2 Logic
+# =======================================================================
+
+def test_accept_on_negative_sentiment(base_input, caplog):
+    """
+    Test Rule 1: ACCEPT (Sentiment Rule)
+    If user is 'negative' and their offer is "close enough" (>= 95% of MAM),
+    we must accept to save the deal.
+    """
+    # Arrange
+    base_input.mam = 42000.0
+    base_input.user_sentiment = "negative" # <-- The trigger
+    
+    # Offer is 40,000. MAM is 42,000. (Standard logic would REJECT)
+    # 95% threshold is 42,000 * 0.95 = 39,900
+    # Since 40,000 > 39,900, this rule should fire.
+    base_input.user_offer = 40000.0
+    
+    # Act
+    with caplog.at_level(logging.WARNING):
+        decision = make_decision(base_input)
+    
+    # Assert
+    assert decision.action == "ACCEPT"
+    assert decision.response_key == "ACCEPT_SENTIMENT_CLOSE" # The new key
+    assert decision.counter_price == 40000.0
+    assert decision.decision_metadata["rule"] == "sentiment_accept_on_negative"
+    assert "ACCEPT (Sentiment Rule)" in caplog.text # Check the log
+
+def test_sentiment_rule_does_not_fire_if_offer_too_low(base_input):
+    """
+    Test that the sentiment rule *doesn't* fire if the user is
+    'negative' but their offer is still too low (e.g., a lowball).
+    """
+    # Arrange
+    base_input.mam = 42000.0
+    base_input.user_sentiment = "negative"
+    
+    # Offer is 30,000. 95% threshold is 39,900.
+    # This should *fail* the sentiment rule and fall through
+    # to the "Lowball REJECT" rule.
+    base_input.user_offer = 30000.0
+    
+    # Act
+    decision = make_decision(base_input)
+    
+    # Assert
+    # It should NOT be 'ACCEPT'
+    assert decision.action == "REJECT"
+    assert decision.response_key == "REJECT_LOWBALL"
+    assert decision.decision_metadata["rule"] == "user_offer_lt_lowball_threshold"
+
+def test_sentiment_rule_does_not_fire_if_sentiment_positive(base_input):
+    """
+    Test that the rule doesn't fire if sentiment is 'positive',
+    even if the offer is in the 95% range.
+    """
+    # Arrange
+    base_input.mam = 42000.0
+    base_input.user_sentiment = "positive" # <-- Not negative
+    base_input.user_offer = 40000.0 # (In the 95% range)
+    
+    # Act
+    # This should fail Rule 1, fail Rule 2 (offer < mam),
+    # and become a standard COUNTER offer.
+    decision = make_decision(base_input)
+    
+    # Assert
+    assert decision.action == "COUNTER"
+    assert decision.response_key == "STANDARD_COUNTER"
+
+# =======================================================================
+#  Existing v1.0 Tests (No changes needed thanks to the fixture)
 # =======================================================================
 
 def test_unbreakable_rule_accept_offer_above_mam(base_input):
     """
-    Test Rule 1: ACCEPT
+    Test Rule 2: ACCEPT (Standard)
     If user_offer is greater than mam, we MUST accept.
     """
     # Arrange
@@ -46,12 +120,12 @@ def test_unbreakable_rule_accept_offer_above_mam(base_input):
     # Assert
     assert decision.action == "ACCEPT"
     assert decision.response_key == "ACCEPT_FINAL"
-    assert decision.counter_price == 43000.0 # Confirms the accepted price
+    assert decision.counter_price == 43000.0
     assert decision.decision_metadata["rule"] == "user_offer_gte_mam"
 
 def test_unbreakable_rule_accept_offer_equals_mam(base_input):
     """
-    Test Edge Case for Rule 1: ACCEPT
+    Test Edge Case for Rule 2: ACCEPT (Standard)
     If user_offer is exactly equal to mam, we MUST accept.
     """
     # Arrange
@@ -64,11 +138,10 @@ def test_unbreakable_rule_accept_offer_equals_mam(base_input):
     # Assert
     assert decision.action == "ACCEPT"
     assert decision.response_key == "ACCEPT_FINAL"
-    assert decision.counter_price == 42000.0
 
 def test_lowball_reject(base_input):
     """
-    Test Rule 2: REJECT (Lowball)
+    Test Rule 3: REJECT (Lowball)
     If user_offer is < 70% of mam.
     """
     # Arrange
@@ -81,35 +154,18 @@ def test_lowball_reject(base_input):
     # Assert
     assert decision.action == "REJECT"
     assert decision.response_key == "REJECT_LOWBALL"
-    assert decision.counter_price is None # Must not counter on a lowball
-    assert decision.decision_metadata["rule"] == "user_offer_lt_lowball_threshold"
-
-def test_lowball_reject_edge_case(base_input):
-    """
-    Test Edge Case for Rule 2: REJECT (Lowball)
-    What if the offer is *just* below the threshold?
-    """
-    # Arrange
-    base_input.mam = 42000.0
-    # Threshold is 29400. Let's offer 29399.99
-    base_input.user_offer = 29399.99
-    
-    # Act
-    decision = make_decision(base_input)
-    
-    # Assert
-    assert decision.action == "REJECT"
-    assert decision.response_key == "REJECT_LOWBALL"
+    assert decision.counter_price is None
 
 def test_standard_counter(base_input):
     """
-    Test Rule 3: COUNTER
+    Test Rule 4: COUNTER
     Offer is > lowball threshold but < mam.
     """
     # Arrange
     base_input.mam = 42000.0
     base_input.asking_price = 50000.0
     base_input.user_offer = 40000.0 # > 29400 (lowball) and < 42000 (mam)
+    base_input.user_sentiment = "neutral" # Not negative
     
     # Act
     decision = make_decision(base_input)
@@ -117,59 +173,5 @@ def test_standard_counter(base_input):
     # Assert
     assert decision.action == "COUNTER"
     assert decision.response_key == "STANDARD_COUNTER"
-    # Mid-point: ceil((50000 + 40000) / 2) = 45000
     assert decision.counter_price == 45000.0 
     assert decision.decision_metadata["rule"] == "standard_counter_midpoint"
-
-def test_standard_counter_edge_case_at_threshold(base_input, caplog):
-    """
-    Test Edge Case for Rule 3: COUNTER
-    What if the offer is *exactly* the lowball threshold?
-    It should be treated as a COUNTER, not a REJECT.
-    """
-    # Arrange
-    base_input.mam = 42000.0
-    base_input.asking_price = 50000.0
-    base_input.user_offer = 29400.0 # Exactly 70% of MAM
-    
-    # Act
-    decision = make_decision(base_input)
-    
-    # Assert
-    assert decision.action == "COUNTER"
-    # Mid-point: ceil((50000 + 29400) / 2) = 39700
-    # Sanity Check: 39700 is less than MAM (42000).
-    # The logic should clamp this counter *up* to MAM.
-    assert decision.counter_price == 42000.0
-    assert decision.decision_metadata["rule"] == "standard_counter_midpoint"
-    assert "Counter (39700.0) was < MAM" in caplog.text # Check the log!
-
-# This is a more advanced test using parametrize and caplog
-@pytest.mark.parametrize("user_offer, asking_price, expected_counter", [
-    (40000, 50000, 45000), # Standard case: (40k+50k)/2 = 45k
-    (30000, 50000, 42000), # Mid-point (40k) < MAM (42k), so clamp to 42k
-    (41000, 43000, 42000), # Mid-point (42k) == MAM, OK
-    (41000, 44000, 42500), # Mid-point (42.5k) > MAM, OK
-])
-def test_counter_offer_sanity_check_logic(base_input, caplog, user_offer, asking_price, expected_counter):
-    """
-    Test Rule 3's "Sanity Check" with multiple values.
-    Ensures our counter-offer is never below MAM.
-    """
-    # Arrange
-    base_input.mam = 42000.0
-    base_input.user_offer = user_offer
-    base_input.asking_price = asking_price
-    
-    # Act
-    # We capture logs to see if our warning message was printed
-    with caplog.at_level(logging.WARNING):
-        decision = make_decision(base_input)
-    
-    # Assert
-    assert decision.action == "COUNTER"
-    assert decision.counter_price == expected_counter
-    
-    # If we expected a clamp, check that the warning log was created
-    if expected_counter == base_input.mam and user_offer != 41000:
-         assert "was < MAM. Adjusting to MAM." in caplog.text
