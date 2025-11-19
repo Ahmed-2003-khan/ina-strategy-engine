@@ -1,5 +1,5 @@
 # Purpose: Houses the core business logic for the negotiation strategy.
-# (Upgraded to v1.1 - Sentiment-Aware)
+# (Upgraded to v1.2 - History-Aware "Split the Difference")
 
 from .schemas import StrategyInput, StrategyOutput
 import logging
@@ -9,58 +9,66 @@ import math
 logger = logging.getLogger(__name__)
 
 # --- Policy Configuration ---
-# We've updated the logic, so we version bump
-POLICY_VERSION = "1.2.0"  # v1.1 was schema, v1.2 is this logic
-LOWBALL_THRESHOLD_PERCENT = 0.70 # 70% of MAM
-SENTIMENT_ACCEPT_THRESHOLD_PERCENT = 0.95 # 95% of MAM
-# --- NEW: Counter-offer "jump" percentage ---
-# 0.75 means we will counter 75% of the way from the user's offer to our MAM
-COUNTER_JUMP_WEIGHT = 0.75
+POLICY_VERSION = "1.3.0"
+
+# Thresholds
+LOWBALL_THRESHOLD_PERCENT = 0.70        # Reject if offer is < 70% of MAM
+SENTIMENT_ACCEPT_THRESHOLD_PERCENT = 0.95 # Panic accept if offer is >= 95% of MAM & sentiment is negative
+
+def get_last_bot_offer(input_data: StrategyInput) -> float:
+    """
+    Helper function to find the most recent price offered by the Bot.
+    
+    It scans the history backwards. 
+    - If it finds a bot move with a price, it returns that.
+    - If negotiation just started (no history), it returns the original asking_price.
+    """
+    # Iterate backwards through history to find the latest bot move
+    for turn in reversed(input_data.history):
+        role = turn.get("role", "").lower()
+        if role == "assistant" or role == "bot":
+            # Check for common keys where price might be stored
+            if "counter_price" in turn and turn["counter_price"] is not None:
+                return float(turn["counter_price"])
+            if "offer" in turn and turn["offer"] is not None:
+                return float(turn["offer"])
+                
+    # Fallback: If no previous bot offer found, we start at the Asking Price
+    return input_data.asking_price
 
 def make_decision(input_data: StrategyInput) -> StrategyOutput:
     """
-    Applies the negotiation strategy (v1.2) to decide the next action.
-    Now includes sentiment-based "panic" rule.
+    Applies the negotiation strategy to decide the next action.
     """
     
+    # Log incoming context
     logger.info(f"Processing decision for session: {input_data.session_id}")
-    logger.info(f"Received sentiment: {input_data.user_sentiment}, intent: {input_data.user_intent}")
+    logger.info(f"NLU Data - Sentiment: {input_data.user_sentiment}, Intent: {input_data.user_intent}")
 
-    # --- NEW: Rule 1 (High Priority): Sentiment-Based Accept ---
-    # Logic: if input.user_offer >= (input.mam * 0.95) and input.sentiment == 'negative'
-    # This rule saves a sale if the user is frustrated and their offer is "close enough".
-    
+    # =================================================================
+    # RULE 1: Sentiment-Based Accept ("The Panic Rule")
+    # =================================================================
     sentiment_accept_threshold = input_data.mam * SENTIMENT_ACCEPT_THRESHOLD_PERCENT
     
     if (input_data.user_sentiment == 'negative' and 
         input_data.user_offer >= sentiment_accept_threshold):
         
-        logger.warning(
-            f"ACCEPT (Sentiment Rule): User offer ({input_data.user_offer}) "
-            f">= panic threshold ({sentiment_accept_threshold}) "
-            f"and sentiment is '{input_data.user_sentiment}'."
-        )
+        logger.warning(f"ACCEPT (Sentiment): Offer {input_data.user_offer} >= threshold {sentiment_accept_threshold}")
         
         return StrategyOutput(
             action="ACCEPT",
-            response_key="ACCEPT_SENTIMENT_CLOSE", # A new key for MS 5
+            response_key="ACCEPT_SENTIMENT_CLOSE",
             counter_price=input_data.user_offer,
             policy_type="rule-based",
             policy_version=POLICY_VERSION,
-            decision_metadata={
-                "rule": "sentiment_accept_on_negative",
-                "mam": input_data.mam,
-                "user_offer": input_data.user_offer,
-                "sentiment": input_data.user_sentiment,
-                "threshold_percent": SENTIMENT_ACCEPT_THRESHOLD_PERCENT,
-                "threshold_value": sentiment_accept_threshold
-            }
+            decision_metadata={"rule": "sentiment_accept_on_negative"}
         )
 
-    # --- Rule 2: The Unbreakable Rule (Standard Accept) ---
-    # This rule only runs if the sentiment rule *fails*.
+    # =================================================================
+    # RULE 2: The Unbreakable Rule (Standard Accept)
+    # =================================================================
     if input_data.user_offer >= input_data.mam:
-        logger.warning(f"ACCEPT (Standard): User offer ({input_data.user_offer}) >= MAM.")
+        logger.warning(f"ACCEPT (Standard): Offer {input_data.user_offer} >= MAM {input_data.mam}")
         
         return StrategyOutput(
             action="ACCEPT",
@@ -68,20 +76,16 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
             counter_price=input_data.user_offer,
             policy_type="rule-based",
             policy_version=POLICY_VERSION,
-            decision_metadata={
-                "rule": "user_offer_gte_mam",
-                "mam": input_data.mam,
-                "user_offer": input_data.user_offer
-            }
+            decision_metadata={"rule": "user_offer_gte_mam"}
         )
     
-    # --- Rule 3: Lowball REJECT Logic ---
-    # Logic: if input.user_offer < (input.mam * 0.7)
-    
+    # =================================================================
+    # RULE 3: Lowball REJECT Logic
+    # =================================================================
     lowball_threshold = input_data.mam * LOWBALL_THRESHOLD_PERCENT
     
     if input_data.user_offer < lowball_threshold:
-        logger.info(f"REJECT (LOWBALL): User offer ({input_data.user_offer}) < threshold ({lowball_threshold}).")
+        logger.info(f"REJECT (Lowball): Offer {input_data.user_offer} < threshold {lowball_threshold}")
         
         return StrategyOutput(
             action="REJECT",
@@ -89,58 +93,48 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
             counter_price=None,
             policy_type="rule-based",
             policy_version=POLICY_VERSION,
-            decision_metadata={
-                "rule": "user_offer_lt_lowball_threshold",
-                "mam": input_data.mam,
-                "user_offer": input_data.user_offer,
-                "threshold_percent": LOWBALL_THRESHOLD_PERCENT,
-                "threshold_value": lowball_threshold
-            }
+            decision_metadata={"rule": "user_offer_lt_lowball_threshold"}
         )
 
-    # --- Rule 4: Smarter COUNTER-OFFER Logic (Today's Task) ---
+    # =================================================================
+    # RULE 4: Counter-Offer Logic (History Aware)
+    # =================================================================
+    # Logic: Meet halfway between the Bot's LAST position and the User's Offer.
+    # Constraint: Never go below MAM.
     
-    # OLD LOGIC (for reference):
-    # counter_offer = math.ceil((input_data.asking_price + input_data.user_offer) / 2)
+    # 1. Determine our current standing
+    current_bot_price = get_last_bot_offer(input_data)
     
-    # NEW "WEIGHTED JUMP" LOGIC:
-    # We calculate the remaining "gap" to our MAM
-    gap_to_mam = input_data.mam - input_data.user_offer
+    # 2. Calculate the "Split the Difference" value
+    # Formula: current_position - (current_position - user_offer) * 0.5
+    # This calculates the midpoint between where we ARE and where they ARE.
+    midpoint = current_bot_price - (current_bot_price - input_data.user_offer) * 0.5
     
-    # We decide to "jump" 75% of that gap
-    jump_amount = gap_to_mam * COUNTER_JUMP_WEIGHT
+    # 3. Apply the Safety Floor using max()
+    # If the midpoint is below MAM, we must stop at MAM.
+    final_counter = max(input_data.mam, midpoint)
     
-    # Our new counter is the user's offer + our jump
-    # We use ceil() to round up, making the counter slightly tougher
-    counter_offer = math.ceil(input_data.user_offer + jump_amount)
+    # 4. Round up to nearest whole number
+    final_counter = math.ceil(final_counter)
     
-    # --- CRITICAL: Counter-offer Sanity Check (No Change) ---
-    # This logic MUST remain. We must ensure our new formula
-    # *never* accidentally calculates a counter *below* the MAM.
-    # (In this case, it should always be >= MAM, but this check is our seatbelt).
-    if counter_offer < input_data.mam:
-        logger.warning(f"Counter ({counter_offer}) was < MAM. Adjusting to MAM.")
-        counter_offer = input_data.mam 
-        
-    # --- NEW: Secondary Sanity Check ---
-    # We also must ensure our counter is not *higher* than the asking price.
-    if counter_offer > input_data.asking_price:
-        logger.warning(f"Counter ({counter_offer}) > asking price. Clamping to {input_data.asking_price}.")
-        counter_offer = input_data.asking_price
-        
-    logger.info(f"COUNTER: User offer ({input_data.user_offer}). Weighted-jump counter: {counter_offer}.")
+    # 5. Sanity Check: Ratchet Effect
+    # Ensure we don't accidentally raise our price if the math gets weird
+    if final_counter > current_bot_price:
+        final_counter = current_bot_price
+
+    logger.info(f"COUNTER: Last Bot Price {current_bot_price} -> User {input_data.user_offer} -> Final {final_counter}")
 
     return StrategyOutput(
         action="COUNTER",
         response_key="STANDARD_COUNTER",
-        counter_price=counter_offer,
+        counter_price=final_counter,
         policy_type="rule-based",
         policy_version=POLICY_VERSION,
         decision_metadata={
-            "rule": "weighted_jump_counter",
+            "rule": "split_difference_max_mam",
             "mam": input_data.mam,
+            "last_bot_price": current_bot_price,
             "user_offer": input_data.user_offer,
-            "jump_weight": COUNTER_JUMP_WEIGHT,
-            "calculated_counter": counter_offer
+            "final_counter": final_counter
         }
     )
