@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 POLICY_VERSION = "1.2.0"  # v1.1 was schema, v1.2 is this logic
 LOWBALL_THRESHOLD_PERCENT = 0.70 # 70% of MAM
 SENTIMENT_ACCEPT_THRESHOLD_PERCENT = 0.95 # 95% of MAM
+# --- NEW: Counter-offer "jump" percentage ---
+# 0.75 means we will counter 75% of the way from the user's offer to our MAM
+COUNTER_JUMP_WEIGHT = 0.75
 
 def make_decision(input_data: StrategyInput) -> StrategyOutput:
     """
@@ -95,17 +98,37 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
             }
         )
 
-    # --- Rule 4: Standard COUNTER-OFFER Logic ---
-    # This is the 'else' case: offer is < MAM, but > lowball, and user isn't 'negative'.
+    # --- Rule 4: Smarter COUNTER-OFFER Logic (Today's Task) ---
     
-    counter_offer = math.ceil((input_data.asking_price + input_data.user_offer) / 2)
+    # OLD LOGIC (for reference):
+    # counter_offer = math.ceil((input_data.asking_price + input_data.user_offer) / 2)
     
-    # Counter-offer Sanity Check
+    # NEW "WEIGHTED JUMP" LOGIC:
+    # We calculate the remaining "gap" to our MAM
+    gap_to_mam = input_data.mam - input_data.user_offer
+    
+    # We decide to "jump" 75% of that gap
+    jump_amount = gap_to_mam * COUNTER_JUMP_WEIGHT
+    
+    # Our new counter is the user's offer + our jump
+    # We use ceil() to round up, making the counter slightly tougher
+    counter_offer = math.ceil(input_data.user_offer + jump_amount)
+    
+    # --- CRITICAL: Counter-offer Sanity Check (No Change) ---
+    # This logic MUST remain. We must ensure our new formula
+    # *never* accidentally calculates a counter *below* the MAM.
+    # (In this case, it should always be >= MAM, but this check is our seatbelt).
     if counter_offer < input_data.mam:
         logger.warning(f"Counter ({counter_offer}) was < MAM. Adjusting to MAM.")
         counter_offer = input_data.mam 
         
-    logger.info(f"COUNTER: User offer ({input_data.user_offer}). Countering with {counter_offer}.")
+    # --- NEW: Secondary Sanity Check ---
+    # We also must ensure our counter is not *higher* than the asking price.
+    if counter_offer > input_data.asking_price:
+        logger.warning(f"Counter ({counter_offer}) > asking price. Clamping to {input_data.asking_price}.")
+        counter_offer = input_data.asking_price
+        
+    logger.info(f"COUNTER: User offer ({input_data.user_offer}). Weighted-jump counter: {counter_offer}.")
 
     return StrategyOutput(
         action="COUNTER",
@@ -114,10 +137,10 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
         policy_type="rule-based",
         policy_version=POLICY_VERSION,
         decision_metadata={
-            "rule": "standard_counter_midpoint",
+            "rule": "weighted_jump_counter",
             "mam": input_data.mam,
             "user_offer": input_data.user_offer,
-            "asking_price": input_data.asking_price,
+            "jump_weight": COUNTER_JUMP_WEIGHT,
             "calculated_counter": counter_offer
         }
     )
