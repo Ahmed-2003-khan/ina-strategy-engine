@@ -14,8 +14,8 @@ SESSION_ID = f"sim_{str(uuid.uuid4())[:8]}"
 # A realistic scenario where the user starts low and slowly moves up.
 MAM = 40000.0           # Our secret floor
 ASKING_PRICE = 50000.0  # What we listed it for
-STARTING_OFFER = 35000.0 # User starts low
-USER_INCREMENT = 1500.0  # User increases offer by $1.5k each turn
+STARTING_OFFER = 30000.0 # User starts low
+USER_INCREMENT = 2000.0  # User increases offer by $1.5k each turn
 
 def run_simulation():
     print("\n" + "="*60)

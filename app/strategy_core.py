@@ -88,7 +88,7 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
     logger.info(f"User Offer Count: {total_user_offers} (Threshold: {USER_OFFER_THRESHOLD})")
 
     # 3. Decide Strategy based on Count
-    if total_user_offers >= USER_OFFER_THRESHOLD:
+    if total_user_offers > USER_OFFER_THRESHOLD:
         # --- FINAL ROUND STRATEGY ---
         concession_factor = FINAL_CONCESSION_FACTOR
         response_key = "COUNTER_FINAL_OFFER"
