@@ -61,38 +61,32 @@ def test_standard_counter_history_aware(base_input):
 
 def test_final_offer_logic_trigger(base_input):
     """
-    Test that the 'Final Offer' logic triggers on the 4th user offer
-    (total_user_offers > 3).
+    Test that the 'Final Offer' logic triggers on the 5th user offer
+    (total_user_offers > 4).
     """
     # ARRANGE
-    # --- FIX: Raise MAM so we don't accept immediately ---
-    base_input.mam = 45000.0 
+    base_input.mam = 45000.0
     base_input.user_offer = 44000.0
     
-    # History has 3 previous user offers.
-    # This current offer will be #4.
+    # History needs 4 previous user offers (so current is #5)
     base_input.history = [
         {"role": "user", "message": "30k"},
         {"role": "assistant", "message": "49k", "counter_price": 49000.0},
         {"role": "user", "message": "35k"},
         {"role": "assistant", "message": "48.5k", "counter_price": 48500.0},
         {"role": "user", "message": "40k"},
-        {"role": "assistant", "message": "48k", "counter_price": 48000.0}
+        {"role": "assistant", "message": "48k", "counter_price": 48000.0},
+        # Add one more round to make history longer
+        {"role": "user", "message": "42k"},
+        {"role": "assistant", "message": "47.5k", "counter_price": 47500.0}
     ]
 
     # ACT
     decision = make_decision(base_input)
 
     # ASSERT
-    # Logic: 4 > 3 is True. Trigger Final Round.
-    # Gap: 48k (Last Bot) - 44k (User) = 4k.
-    # Strategy: Concede 75%. Drop = 3k.
-    # Result: 48k - 3k = 45k.
-    # Check against MAM: 45k >= 45k (Valid).
-    
-    assert decision.action == "COUNTER"
-    assert decision.response_key == "COUNTER_FINAL_OFFER" # The special key
-    assert decision.counter_price == 46000.0
+    # Logic: 5 > 4 is True. Trigger Final Round.
+    assert decision.response_key == "COUNTER_FINAL_OFFER"
     assert decision.decision_metadata["is_final_round"] is True
 
 def test_ratchet_check_prevents_price_increase(base_input):

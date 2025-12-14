@@ -18,7 +18,7 @@ SENTIMENT_ACCEPT_THRESHOLD_PERCENT = 0.95
 # New: Offer Count Threshold
 # We trigger "Final Offer" logic if the user has made at least this many offers
 # (including the current one).
-USER_OFFER_THRESHOLD = 3 
+USER_OFFER_THRESHOLD = 4 
 
 # --- NEW CONCESSION FACTORS (Tougher Logic) ---
 # Standard: Only drop 25% of the gap (was 50%)
