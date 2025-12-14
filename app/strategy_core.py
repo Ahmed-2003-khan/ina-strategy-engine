@@ -9,7 +9,7 @@ import math
 logger = logging.getLogger(__name__)
 
 # --- Policy Configuration ---
-POLICY_VERSION = "1.3.2"
+POLICY_VERSION = "1.3.3"
 
 # Thresholds
 LOWBALL_THRESHOLD_PERCENT = 0.70
@@ -19,6 +19,14 @@ SENTIMENT_ACCEPT_THRESHOLD_PERCENT = 0.95
 # We trigger "Final Offer" logic if the user has made at least this many offers
 # (including the current one).
 USER_OFFER_THRESHOLD = 3 
+
+# --- NEW CONCESSION FACTORS (Tougher Logic) ---
+# Standard: Only drop 25% of the gap (was 50%)
+STANDARD_CONCESSION_FACTOR = 0.25 
+
+# Final: Meet halfway (was 75%)
+FINAL_CONCESSION_FACTOR = 0.50 
+# ----------------------------------------------
 
 def get_last_bot_offer(input_data: StrategyInput) -> float:
     """
@@ -82,12 +90,12 @@ def make_decision(input_data: StrategyInput) -> StrategyOutput:
     # 3. Decide Strategy based on Count
     if total_user_offers >= USER_OFFER_THRESHOLD:
         # --- FINAL ROUND STRATEGY ---
-        concession_factor = 0.75
+        concession_factor = FINAL_CONCESSION_FACTOR
         response_key = "COUNTER_FINAL_OFFER"
         logger.info("Offer Threshold reached. Triggering Final Offer.")
     else:
         # --- STANDARD STRATEGY ---
-        concession_factor = 0.5
+        concession_factor = STANDARD_CONCESSION_FACTOR
         response_key = "STANDARD_COUNTER"
 
     # 4. Calculate Concession
